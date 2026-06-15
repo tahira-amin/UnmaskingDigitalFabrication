@@ -8,27 +8,18 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
-# FOLD-AWARE DUAL-STREAM EXTRACTOR (Branch A) — STEP 1 of 3
-# -----------------------------------------------------------------------------
+
+# MOBILENETV3 EXTRACTOR FOR BRANCH A — STEP 1 of 3
+
 # This extractor runs ONLY the frozen MobileNetV3-Large backbone and caches the
-# 960-dim semantic features per frame. The noise CNN is NOT trained here.
-#
-# WHY: in the original dualstream extractor, the noise CNN was fine-tuned on
-# 80% of the videos before features were saved. When 5-fold CV later split
-# those features differently, test folds contained videos the noise CNN had
-# already seen during fine-tuning. This is feature-extractor leakage.
-#
-# In this fold-aware pipeline, the noise CNN is trained INSIDE the trainer,
-# fresh per fold, on that fold's training videos only. The frozen MobileNetV3-Large
-# never trains, so its features are leakage-free regardless of how the data
-# is later split — that's why it can stay in this extractor (computed once).
-# =============================================================================
+# 960-dim semantic features per frame
+
+
 
 INPUT_ROOT      = "processed"
 ROUTING_FILE    = "video_routing.csv"
-OUTPUT_FEATURES = "branch_a_features_dualstream_fa_mobilenet.npy"   # 960-dim semantic only
-OUTPUT_METADATA = "branch_a_metadata_dualstream_fa_mobilenet.csv"
+OUTPUT_FEATURES = "branch_a_features_mobilenet.npy"   # 960-dim semantic only
+OUTPUT_METADATA = "branch_a_metadata_mobilenet.csv"
 BATCH_SIZE      = 32
 
 

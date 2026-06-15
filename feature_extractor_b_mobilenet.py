@@ -8,30 +8,20 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
-# FOLD-AWARE DUAL-STREAM EXTRACTOR (Branch B) — STEP 1 of 2
+
+# MOBILENETV3 EXTRACTOR (Branch B) — STEP 1 of 2
 # -----------------------------------------------------------------------------
 # This extractor runs ONLY the frozen MobileNetV3-Large backbone and caches the
-# 960-dim semantic features per frame. The noise CNN is NOT trained here.
-#
-# WHY: in the original dualstream extractor, the noise CNN was fine-tuned before
-# features were saved. When 5-fold CV later split those saved features differently,
-# test folds could contain videos the noise CNN had already seen during fine-tuning.
-# This is feature-extractor leakage.
-#
-# In this fold-aware pipeline, the noise CNN is trained INSIDE the trainer,
-# fresh per fold, on that fold's training videos only. The frozen MobileNetV3
-# never trains, so its features are leakage-free regardless of how the data
-# is later split — that's why it can stay in this extractor, computed once.
+# 960-dim semantic features per frame. 
 #
 # Branch B semantic stream:
 #   MobileNetV3-Large -> 960-dim features
-# =============================================================================
+
 
 INPUT_ROOT      = "processed"
 ROUTING_FILE    = "video_routing.csv"
-OUTPUT_FEATURES = "branch_b_features_dualstream_fa.npy"   # 960-dim MobileNetV3 semantic only
-OUTPUT_METADATA = "branch_b_metadata_dualstream_fa.csv"
+OUTPUT_FEATURES = "branch_b_features_mobilenet.npy"   # 960-dim MobileNetV3 semantic only
+OUTPUT_METADATA = "branch_b_metadata_labeled_mobilenet.csv"
 BATCH_SIZE      = 32
 
 
@@ -211,7 +201,7 @@ def main():
     print(f"Saved metadata to {OUTPUT_METADATA}")
     print(f"Total time: {time.time() - start:.2f}s")
     print("\nNote: this file contains ONLY the 960-dim MobileNetV3 semantic stream.")
-    print("      The SRM/noise CNN is trained inside train_branch_b_dualstream_fa_no_temporal.py.")
+    print("      The SRM/noise CNN is trained inside train_branch_b_triplestream.py.")
 
 
 if __name__ == "__main__":

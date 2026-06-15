@@ -9,16 +9,16 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
+
 # MATCHED-SIZE NO-BRANCHING BASELINE — EXTRACTOR (STEP 1 of 3)
-# -----------------------------------------------------------------------------
+
 # Selects 65 videos at random from each of the 4 subfolders
 # (high_quality_ai, high_quality_real, low_quality_ai, low_quality_real)
 # = 260 videos total, matching the per-branch training size of Branch A and
 # Branch B. This isolates the branching effect from the data-size effect that
 # made the all-520 baseline look better than the branches.
 # Mirrors feature_extractor_all_effnet.py except for the balanced subsample.
-# =============================================================================
+
 
 # CONFIGURATION
 INPUT_ROOT = "processed"

@@ -6,9 +6,9 @@ except Exception:
 
 import torch
 
-# =================================================================
-# FIX 1: FORCE EXACT PRECISION FOR SRM NOISE EXTRACTION ON CUDA
-# =================================================================
+
+#  FORCE EXACT PRECISION FOR SRM NOISE EXTRACTION ON CUDA
+
 torch.backends.cudnn.allow_tf32 = False
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.benchmark = False
@@ -23,45 +23,35 @@ from PIL import Image
 import pandas as pd
 import numpy as np
 import cv2
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit
+from sklearn.model_selection import GroupKFold
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (accuracy_score, precision_score, recall_score,
                               f1_score, average_precision_score, roc_auc_score)
+import joblib
 import time
 import random
 from tqdm import tqdm
 
-# =============================================================================
+
 # TRIPLE-STREAM TRAINER (Branch B) — MobileNetV3 + Noise CNN + Farneback Flow
-# -----------------------------------------------------------------------------
-# Random train/test split variant (GroupShuffleSplit, test_size=0.2).
+
 # Streams per frame:
 #   1. Cached 960-dim MobileNetV3-Large semantic features.
-#   2. 128-dim noise features from a noise CNN (SRM + 3 conv).
-#      Noise CNN is trained on the train split videos only.
+#   2. 128-dim noise features from a FOLD-AWARE noise CNN (SRM + 3 conv).
+#      A fresh noise CNN is trained on each fold's TRAIN videos only.
 #   3. 5-dim Farneback optical flow stats (mean_mag, std_mag, max_mag,
 #      mean_cos_angle, mean_sin_angle) per frame.
 # Final feature vector: 960 + 128 + 5 = 1093-dim.
-#
-# CHANGE vs train_branch_b_triplestream_noise_flow.py:
-#   * 5-fold GroupKFold cross-validation replaced with a single random
-#     GroupShuffleSplit (test_size=0.2). All other logic is identical.
-#
-# CACHE POLICY:
-#   * Optical flow is recomputed FRESHLY on every run (no cache load).
-#   * Semantic features are loaded from the cache produced by the upstream
-#     MobileNetV3 extractor.
-#   * Noise features are recomputed once on the train split.
-#
+
 # Inner CV: LEAKAGE-FREE. select_C_inner receives UNSCALED features and fits
 # a fresh StandardScaler per inner fold.
 # =============================================================================
 
-SEMANTIC_FEATURES_PATH = "branch_b_features_dualstream_fa.npy"
-METADATA_PATH          = "branch_b_metadata_dualstream_fa.csv"
-FLOW_OUTPUT            = "branch_b_flow_farneback_triplestream_randomsplit.npy"
-MODEL_OUT              = "model_branch_b_triplestream_noise_flow_randomsplit.pkl"
+SEMANTIC_FEATURES_PATH = "branch_b_features_mobilenet.npy"
+METADATA_PATH          = "branch_b_metadata_labeled_mobilenet.csv"
+FLOW_OUTPUT            = "branch_b_flow_farneback_triplestream.npy"
+MODEL_OUT              = "model_branch_b_triplestream_noise_flow.pkl"
 
 # Noise CNN fine-tune config
 BATCH_TRAIN     = 64
@@ -70,8 +60,8 @@ FINETUNE_EPOCHS = 5
 FINETUNE_LR     = 5e-4
 WEIGHT_DECAY    = 5e-4
 
-# split / logreg config
-TEST_SIZE    = 0.2
+# CV / logreg config
+N_FOLDS      = 5
 C_GRID       = [0.001, 0.01, 0.1, 1, 10, 100]
 RANDOM_STATE = 42
 FLOW_RESIZE  = 224
@@ -133,9 +123,9 @@ class FrameDataset(Dataset):
 
 
 def get_preprocess():
-    # =================================================================
-    # FIX 2: RAW PIXEL TENSORS ONLY (NO IMAGENET NORMALIZATION)
-    # =================================================================
+   
+    #  RAW PIXEL TENSORS ONLY (NO IMAGENET NORMALIZATION)
+    
     return transforms.Compose([
         transforms.Resize(232, interpolation=transforms.InterpolationMode.BILINEAR),
         transforms.CenterCrop(224),
@@ -295,6 +285,18 @@ def video_level_preds(y_true, y_pred, groups):
     return g['true'].values, g['pred'].values
 
 
+def video_auc(y_true, y_proba, groups):
+    """AUC computed at video level using mean per-frame probability per video.
+    This is more honest than frame AUC because it treats each VIDEO as one
+    independent sample rather than inflating sample size with correlated frames."""
+    df = pd.DataFrame({'video': groups, 'true': y_true, 'proba': y_proba})
+    g = df.groupby('video').agg(true=('true', 'first'),
+                                proba=('proba', 'mean'))
+    if len(np.unique(g['true'].values)) < 2:
+        return np.nan
+    return roc_auc_score(g['true'].values, g['proba'].values)
+
+
 def select_C_inner(X_train_full, y_train, train_groups):
     """LEAKAGE-FREE C selection. Receives UNSCALED training features and fits
     a fresh StandardScaler per inner fold. Returns (best_c, best_inner_score)."""
@@ -342,7 +344,7 @@ def select_C_inner(X_train_full, y_train, train_groups):
 
 def main():
     start = time.time()
-    print("--- TRAIN BRANCH B TRIPLE-STREAM (MobileNetV3 + Noise CNN + Farneback Flow, RANDOM SPLIT, NO PCA) ---")
+    print("--- TRAIN BRANCH B TRIPLE-STREAM (MobileNetV3 + Noise CNN + Farneback Flow, 5-FOLD CV) ---")
     print("--- (leakage-free inner CV: fresh scaler per inner fold) ---\n")
 
     try:
@@ -350,7 +352,7 @@ def main():
         metadata = pd.read_csv(METADATA_PATH)
         print(f"Loaded {len(semantic)} frames with {semantic.shape[1]}-dim semantic features")
     except FileNotFoundError:
-        print("Error: Files not found. Run branch_b_dualstream_fa_mobilenetv3_clean.py first.")
+        print("Error: Files not found. Run feature_extractor_b_mobilenet.py first.")
         return
 
     if len(semantic) != len(metadata):
@@ -374,9 +376,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     if device.type != 'cuda':
-        print("WARNING: no CUDA — noise CNN training will be slow on CPU.")
+        print("WARNING: no CUDA — per-fold noise CNN training will be slow on CPU.")
 
-    # --- Compute optical flow ONCE (no leakage; pixel-deterministic) ---
+    # --- Compute optical flow ONCE outside the fold loop (no leakage; pixel-deterministic) ---
     print("\nBuilding prev-frame map (forward diff for first frame of each video)...")
     prev_paths = build_prev_paths(metadata)
 
@@ -387,100 +389,238 @@ def main():
     print(f"   Flow shape: {flow_stats.shape}, "
           f"mean_mag avg={flow_stats[:,0].mean():.3f}, max_mag avg={flow_stats[:,2].mean():.3f}")
 
-    print(f"\nRunning random split (test_size={TEST_SIZE}) evaluation (NO PCA)...")
-    gss = GroupShuffleSplit(n_splits=1, test_size=TEST_SIZE, random_state=RANDOM_STATE)
-    train_idx, test_idx = next(gss.split(semantic, y_all, groups))
+    gkf = GroupKFold(n_splits=N_FOLDS)
+    frame_accs, vid_accs, fold_Cs, fold_inner_scores = [], [], [], []
+    frame_precs, frame_recs, frame_f1s = [], [], []
+    vid_precs, vid_recs, vid_f1s = [], [], []
+    frame_aps, frame_aucs, vid_aucs = [], [], []
+    infer_times, n_test_vids_list = [], []
+    fold_num = 0
+    cv_start = time.time()
 
-    print(f"Train: {len(train_idx)} frames / {len(np.unique(groups[train_idx]))} videos | "
-          f"Test: {len(test_idx)} frames / {len(np.unique(groups[test_idx]))} videos")
+    for train_idx, test_idx in gkf.split(semantic, y_all, groups):
+        fold_num += 1
+        print(f"\n=== FOLD {fold_num}/{N_FOLDS} ===")
+        print(f"Train: {len(train_idx)} frames / {len(np.unique(groups[train_idx]))} videos | "
+              f"Test: {len(test_idx)} frames / {len(np.unique(groups[test_idx]))} videos")
 
-    # 1. Train noise CNN on train videos only
-    train_records = [records[i] for i in train_idx]
-    print(f"  Training noise CNN on {len(train_records)} train frames...")
-    t0_noise_train = time.time()
-    noise_cnn = finetune_noise_cnn(train_records, preprocess, device, fold_seed=43)
-    noise_train_time = time.time() - t0_noise_train
+        train_records = [records[i] for i in train_idx]
+        test_records_fold = [records[i] for i in test_idx]
 
-    # 2. Extract noise features for ALL frames with this noise CNN
-    print(f"  Extracting noise features for all {len(records)} frames...")
-    t0_noise_extract = time.time()
-    noise = extract_noise_features(noise_cnn, records, preprocess, device)
-    noise_extract_time = time.time() - t0_noise_extract
-    del noise_cnn
-    if device.type == 'cuda':
-        torch.cuda.empty_cache()
+        # 1. Fresh noise CNN on this fold's train videos only
+        print(f"  Training fresh noise CNN on {len(train_records)} train frames...")
+        t0_noise_train = time.time()
+        noise_cnn = finetune_noise_cnn(train_records, preprocess, device, fold_seed=42 + fold_num)
+        noise_train_time = time.time() - t0_noise_train
 
-    # 3. Combine streams: semantic (960) + noise (128) + flow (5) = 1093 dims
-    full = np.hstack([semantic, noise, flow_stats])
+        # 2. Extract noise features for train frames (for SVM training)
+        print(f"  Extracting noise features for {len(train_records)} train frames...")
+        t0_noise_extract = time.time()
+        noise_train_feat = extract_noise_features(noise_cnn, train_records, preprocess, device)
+        noise_extract_time = time.time() - t0_noise_extract
 
-    # 4. Split into train/test
-    X_tr_full, X_te_full = full[train_idx], full[test_idx]
-    y_tr, y_te = y_all[train_idx], y_all[test_idx]
-    groups_tr, groups_te = groups[train_idx], groups[test_idx]
+        # 3. Extract noise features for test frames — this is the CNN part of inference
+        t0_noise_infer = time.time()
+        noise_test_feat = extract_noise_features(noise_cnn, test_records_fold, preprocess, device)
+        noise_infer_time = time.time() - t0_noise_infer
 
-    # 5. C selection on UNSCALED features (fresh scaler per inner fold)
-    best_c, best_inner_score = select_C_inner(X_tr_full, y_tr, groups_tr)
+        del noise_cnn
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
 
-    # 6. Outer scaler — fit on train only, transform test
-    scaler = StandardScaler()
-    X_tr = scaler.fit_transform(X_tr_full)
-    X_te = scaler.transform(X_te_full)
+        # 4. Build feature matrices: semantic (960) + noise (128) + flow (5) = 1093 dims
+        X_tr_full = np.hstack([semantic[train_idx], noise_train_feat, flow_stats[train_idx]])
+        X_te_full = np.hstack([semantic[test_idx],  noise_test_feat,  flow_stats[test_idx]])
+        y_tr, y_te = y_all[train_idx], y_all[test_idx]
+        groups_tr, groups_te = groups[train_idx], groups[test_idx]
 
-    # 7. Train LogReg on scaled features
-    clf = LogisticRegression(C=best_c, random_state=RANDOM_STATE,
-                             class_weight='balanced', max_iter=2000)
-    t0_train = time.time()
-    clf.fit(X_tr, y_tr)
-    train_time = time.time() - t0_train
+        # 5. C selection on UNSCALED features (fresh scaler per inner fold)
+        best_c, best_inner_score = select_C_inner(X_tr_full, y_tr, groups_tr)
+        fold_Cs.append(best_c)
+        fold_inner_scores.append(best_inner_score)
 
-    t0_infer = time.time()
-    y_pred = clf.predict(X_te)
-    infer_time = time.time() - t0_infer
+        # 6. Outer scaler — fit on train only, transform test
+        scaler = StandardScaler()
+        X_tr = scaler.fit_transform(X_tr_full)
+        X_te = scaler.transform(X_te_full)
 
-    t0_test = time.time()
-    y_proba = clf.predict_proba(X_te)[:, 1]
-    f_acc  = accuracy_score(y_te, y_pred)
-    f_prec = precision_score(y_te, y_pred, zero_division=0)
-    f_rec  = recall_score(y_te, y_pred, zero_division=0)
-    f_f1   = f1_score(y_te, y_pred, zero_division=0)
-    f_ap   = average_precision_score(y_te, y_proba)
-    f_auc  = roc_auc_score(y_te, y_proba)
-    vt, vp = video_level_preds(y_te, y_pred, groups_te)
-    v_acc  = accuracy_score(vt, vp)
-    v_prec = precision_score(vt, vp, zero_division=0)
-    v_rec  = recall_score(vt, vp, zero_division=0)
-    v_f1   = f1_score(vt, vp, zero_division=0)
-    test_time = time.time() - t0_test
+        # 7. Train LogReg on scaled features
+        clf = LogisticRegression(C=best_c, random_state=RANDOM_STATE,
+                                 class_weight='balanced', max_iter=2000)
+        t0_train = time.time()
+        clf.fit(X_tr, y_tr)
+        train_time = time.time() - t0_train
 
-    inner_str = f"{best_inner_score:.4f}" if not np.isnan(best_inner_score) else "n/a"
-    print(f"  C={best_c}  inner_cv={inner_str}  frame={f_acc:.4f}  video={v_acc:.4f}")
-    print(f"  frame prec={f_prec:.4f} rec={f_rec:.4f} f1={f_f1:.4f} AP={f_ap:.4f} AUC={f_auc:.4f}")
-    print(f"  video prec={v_prec:.4f} rec={v_rec:.4f} f1={v_f1:.4f}")
-    total_train_time = flow_time + noise_train_time + noise_extract_time + train_time
-    print(f"  train={train_time:.3f}s  infer={infer_time:.4f}s  test={test_time:.4f}s")
+        # 8. Inference: CNN on test frames already timed above; add SVM predict
+        t0_svm_infer = time.time()
+        y_pred = clf.predict(X_te)
+        svm_infer_time = time.time() - t0_svm_infer
+        infer_time = noise_infer_time + svm_infer_time  # full end-to-end inference
+
+        t0_test = time.time()
+        y_proba = clf.predict_proba(X_te)[:, 1]
+        f_acc  = accuracy_score(y_te, y_pred)
+        f_prec = precision_score(y_te, y_pred, zero_division=0)
+        f_rec  = recall_score(y_te, y_pred, zero_division=0)
+        f_f1   = f1_score(y_te, y_pred, zero_division=0)
+        f_ap   = average_precision_score(y_te, y_proba)
+        f_auc  = roc_auc_score(y_te, y_proba)
+        vt, vp = video_level_preds(y_te, y_pred, groups_te)
+        v_acc  = accuracy_score(vt, vp)
+        v_prec = precision_score(vt, vp, zero_division=0)
+        v_rec  = recall_score(vt, vp, zero_division=0)
+        v_f1   = f1_score(vt, vp, zero_division=0)
+        v_auc  = video_auc(y_te, y_proba, groups_te)
+        test_time = time.time() - t0_test
+
+        frame_accs.append(f_acc);  vid_accs.append(v_acc)
+        frame_precs.append(f_prec); frame_recs.append(f_rec); frame_f1s.append(f_f1)
+        vid_precs.append(v_prec);  vid_recs.append(v_rec);  vid_f1s.append(v_f1)
+        frame_aps.append(f_ap);    frame_aucs.append(f_auc); vid_aucs.append(v_auc)
+        n_test_vids = len(np.unique(groups_te))
+        infer_times.append(infer_time)
+        n_test_vids_list.append(n_test_vids)
+
+        inner_str = f"{best_inner_score:.4f}" if not np.isnan(best_inner_score) else "n/a"
+        print(f"  Fold {fold_num}: C={best_c}  inner_cv={inner_str}  "
+              f"frame={f_acc:.4f}  video={v_acc:.4f}")
+        print(f"           frame prec={f_prec:.4f} rec={f_rec:.4f} f1={f_f1:.4f} "
+              f"AP={f_ap:.4f} AUC={f_auc:.4f}")
+        v_auc_str = f"{v_auc:.4f}" if not np.isnan(v_auc) else "n/a"
+        print(f"           video prec={v_prec:.4f} rec={v_rec:.4f} f1={v_f1:.4f} AUC={v_auc_str}")
+        print(f"           infer_per_video={infer_time/n_test_vids:.4f}s")
 
     print("\n" + "="*70)
-    print("RANDOM SPLIT RESULTS (MobileNetV3 + Noise CNN + Optical Flow)")
+    print("5-FOLD CV RESULTS (MobileNetV3 + Noise CNN + Optical Flow)")
     print("="*70)
-    print(f"Selected C:              {best_c}")
-    print(f"Inner CV score:          {inner_str}")
-    print(f"\nFrame Accuracy:          {f_acc:.4f}")
-    print(f"Frame Precision:         {f_prec:.4f}")
-    print(f"Frame Recall:            {f_rec:.4f}")
-    print(f"Frame F1:                {f_f1:.4f}")
-    print(f"Frame AP:                {f_ap:.4f}")
-    print(f"Frame ROC-AUC:           {f_auc:.4f}")
-    print(f"\nVideo Accuracy:          {v_acc:.4f}")
-    print(f"Video Precision:         {v_prec:.4f}")
-    print(f"Video Recall:            {v_rec:.4f}")
-    print(f"Video F1:                {v_f1:.4f}")
-    print(f"\nOptical Flow Time:       {flow_time:.1f}s")
-    print(f"Noise CNN Training Time: {noise_train_time:.1f}s")
-    print(f"Noise Extraction Time:   {noise_extract_time:.1f}s")
-    print(f"SVM Training Time:       {train_time:.3f}s")
-    print(f"Total Training Time:     {total_train_time:.1f}s")
-    print(f"Inference Time:          {infer_time:.4f}s")
-    print(f"Testing Time:            {test_time:.4f}s")
+    print(f"Per-fold C values:        {fold_Cs}")
+    print(f"Per-fold inner CV scores: {[f'{s:.4f}' if not np.isnan(s) else 'n/a' for s in fold_inner_scores]}")
+    print(f"Per-fold FRAME accuracy:  {[f'{a:.4f}' for a in frame_accs]}")
+    print(f"Per-fold VIDEO accuracy:  {[f'{a:.4f}' for a in vid_accs]}")
+    print(f"\nAVERAGE Frame Accuracy:   {np.mean(frame_accs):.4f} +/- {np.std(frame_accs):.4f}")
+    print(f"AVERAGE Frame Precision:  {np.mean(frame_precs):.4f} +/- {np.std(frame_precs):.4f}")
+    print(f"AVERAGE Frame Recall:     {np.mean(frame_recs):.4f} +/- {np.std(frame_recs):.4f}")
+    print(f"AVERAGE Frame F1:         {np.mean(frame_f1s):.4f} +/- {np.std(frame_f1s):.4f}")
+    print(f"AVERAGE Frame AP:         {np.mean(frame_aps):.4f} +/- {np.std(frame_aps):.4f}")
+    print(f"Mean AP (avg over folds): {np.mean(frame_aps):.4f}")
+    print(f"AVERAGE Frame ROC-AUC:    {np.mean(frame_aucs):.4f} +/- {np.std(frame_aucs):.4f}")
+    print(f"\nAVERAGE Video Accuracy:   {np.mean(vid_accs):.4f} +/- {np.std(vid_accs):.4f}")
+    print(f"AVERAGE Video Precision:  {np.mean(vid_precs):.4f} +/- {np.std(vid_precs):.4f}")
+    print(f"AVERAGE Video Recall:     {np.mean(vid_recs):.4f} +/- {np.std(vid_recs):.4f}")
+    print(f"AVERAGE Video F1:         {np.mean(vid_f1s):.4f} +/- {np.std(vid_f1s):.4f}")
+    valid_vid_aucs = [a for a in vid_aucs if not np.isnan(a)]
+    if valid_vid_aucs:
+        print(f"AVERAGE Video ROC-AUC:    {np.mean(valid_vid_aucs):.4f} +/- {np.std(valid_vid_aucs):.4f}")
+    cv_total_time = time.time() - cv_start
+    print(f"\n5-Fold CV Training Time:       {cv_total_time:.1f}s")
+
+    # ---- FINAL DEPLOYABLE MODEL ----
+    print("\nFitting FINAL deployable model on ALL data (noise CNN + logreg)...")
+    t0_final = time.time()
+
+    t0_final_noise_train = time.time()
+    final_noise_cnn = finetune_noise_cnn(records, preprocess, device, fold_seed=42)
+    final_noise_train_time = time.time() - t0_final_noise_train
+
+    t0_final_noise_extract = time.time()
+    final_noise = extract_noise_features(final_noise_cnn, records, preprocess, device)
+    final_noise_extract_time = time.time() - t0_final_noise_extract
+
+    full_all = np.hstack([semantic, final_noise, flow_stats])
+
+    best_c_final, final_inner_score = select_C_inner(full_all, y_all, groups)
+    inner_str = f"{final_inner_score:.4f}" if not np.isnan(final_inner_score) else "n/a"
+    print(f"   Final selected C: {best_c_final}  (inner cv = {inner_str})")
+
+    scaler_final = StandardScaler()
+    X_all = scaler_final.fit_transform(full_all)
+    final_clf = LogisticRegression(C=best_c_final, random_state=RANDOM_STATE,
+                                   class_weight='balanced', max_iter=2000)
+    t0_final_svm = time.time()
+    final_clf.fit(X_all, y_all)
+    final_svm_time = time.time() - t0_final_svm
+    final_train_time = time.time() - t0_final
+
+    noise_path = MODEL_OUT.replace('.pkl', '_noisecnn.pt')
+    torch.save(final_noise_cnn.state_dict(), noise_path)
+    joblib.dump({
+        'model': final_clf,
+        'scaler': scaler_final,
+        'noise_cnn_state': noise_path,
+        'flow_output_for_inspection': FLOW_OUTPUT,
+        'feature_layout': '960 MobileNetV3 + 128 noise CNN + 5 Farneback flow = 1093 dim',
+        'cv_frame_accuracy_mean': float(np.mean(frame_accs)),
+        'cv_frame_accuracy_std':  float(np.std(frame_accs)),
+        'cv_video_accuracy_mean': float(np.mean(vid_accs)),
+        'cv_video_accuracy_std':  float(np.std(vid_accs)),
+        'cv_per_fold_C': fold_Cs,
+        'cv_per_fold_inner_scores': fold_inner_scores,
+    }, MODEL_OUT)
+    print(f"Saved logreg+scaler to {MODEL_OUT}")
+    print(f"Saved noise CNN weights to {noise_path}")
+
+    # --- Model Statistics ---
+    n_features           = full_all.shape[1]
+    cnn_total_params     = sum(p.numel() for p in final_noise_cnn.parameters())
+    cnn_trainable_params = sum(p.numel() for p in final_noise_cnn.parameters() if p.requires_grad)
+    cnn_size_mb          = sum(p.numel() * p.element_size() for p in final_noise_cnn.parameters()) / (1024 ** 2)
+    lr_params            = final_clf.coef_.size + final_clf.intercept_.size
+    lr_size_kb           = (lr_params * 8) / 1024   # float64 coefficients
+    lr_flops             = 2 * n_features + 1        # dot-product + bias per sample
+
+    try:
+        from thop import profile as _thop_profile
+        _dummy_input = torch.randn(1, 3, 224, 224).to(device)
+        with torch.no_grad():
+            _cnn_flops, _ = _thop_profile(final_noise_cnn, inputs=(_dummy_input,), verbose=False)
+        cnn_flops_str = f"{_cnn_flops / 1e6:.2f} M"
+    except ImportError:
+        cnn_flops_str = "N/A (pip install thop)"
+
+    # single-sample CNN inference (warm-up then timed loop)
+    final_noise_cnn.eval()
+    _dummy_img  = torch.randn(1, 3, 224, 224).to(device)
+    _dummy_feat = np.zeros((1, n_features))
+    with torch.no_grad():
+        for _ in range(20):
+            final_noise_cnn(_dummy_img)
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    _t0 = time.perf_counter()
+    with torch.no_grad():
+        for _ in range(200):
+            final_noise_cnn(_dummy_img)
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    cnn_infer_ms = (time.perf_counter() - _t0) / 200 * 1000
+
+    # single-sample LogReg inference
+    for _ in range(20):
+        final_clf.predict(_dummy_feat)
+    _t0 = time.perf_counter()
+    for _ in range(1000):
+        final_clf.predict(_dummy_feat)
+    lr_infer_ms = (time.perf_counter() - _t0) / 1000 * 1000
+
+    print("\n" + "="*70)
+    print("MODEL STATISTICS")
+    print("="*70)
+    infer_per_video = sum(infer_times) / sum(n_test_vids_list)
+    print(f"Optical Flow Time:               {flow_time:.1f}s")
+    print(f"5-Fold CV Training Time:         {cv_total_time:.1f}s")
+    print(f"Final Model Training Time:       {final_train_time:.1f}s")
+    print(f"Inference Time per Video:        {infer_per_video*1000:.2f}ms")
+    print(f"Feature dimensions:                  {n_features:,}")
+    print(f"Noise CNN — total params:            {cnn_total_params:,}")
+    print(f"Noise CNN — trainable params:        {cnn_trainable_params:,}")
+    print(f"Noise CNN — model size:              {cnn_size_mb:.4f} MB")
+    print(f"Noise CNN — FLOPs (224x224 input):   {cnn_flops_str}")
+    print(f"LogReg    — parameters:              {lr_params:,}")
+    print(f"LogReg    — model size:              {lr_size_kb:.2f} KB")
+    print(f"LogReg    — FLOPs/sample:            {lr_flops:,}")
+    print(f"Single-sample inference (CNN):       {cnn_infer_ms:.4f} ms")
+    print(f"Single-sample inference (LogReg):    {lr_infer_ms:.4f} ms")
+    print(f"Single-sample inference (CNN+LogReg):{cnn_infer_ms + lr_infer_ms:.4f} ms")
 
     print(f"\nTotal script time: {time.time()-start:.1f}s")
 

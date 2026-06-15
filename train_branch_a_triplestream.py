@@ -17,41 +17,31 @@ import joblib
 import time
 from tqdm import tqdm
 
-# =============================================================================
+
 # TRIPLE-STREAM TRAINER (Branch A) — EffNet + MobileNetV3 + FARNEBACK FLOW
-# -----------------------------------------------------------------------------
+
 # Streams:
 #   1. Cached 1280-dim EfficientNet-B0 semantic features.
 #   2. Cached 960-dim MobileNetV3-Large semantic features.
 #   3. 5-dim Farneback optical flow stats per frame (mean_mag, std_mag,
 #      max_mag, mean_cos_angle, mean_sin_angle).
 # Final feature vector: 1280 + 960 + 5 = 2245-dim.
-# No noise CNN. No temporal frame-diff stats. No PCA.
+
 # 5-fold GroupKFold, StandardScaler-on-train-only, inner-CV C selection.
-#
-# CHANGE vs the previous version of this file:
-#   * select_C_inner is now LEAKAGE-FREE. It receives UNSCALED training
-#     features and fits a fresh StandardScaler per inner fold. Previously it
-#     received already-scaled features, which let the outer scaler statistics
-#     (computed on the FULL outer train) reach the inner-validation rows.
-#     Leak was scaler-only (no labels, no values) and symmetric across C,
-#     but it's still cleaner to remove it.
-#
-# CACHE POLICY: optical flow is recomputed FRESHLY on every run. Written to
-# FLOW_OUTPUT for inspection but never read back.
-#
+
+
 # Both .npy files MUST come from the same frame set in the same order. The
 # script verifies this row-by-row using the (video_name, filename) pair in
 # the two metadata CSVs.
 # =============================================================================
 
-EFFNET_FEATURES_PATH    = "branch_a_features_dualstream_fa.npy"               # 1280-dim
-EFFNET_METADATA_PATH    = "branch_a_metadata_labeled_dualstream_fa.csv"
+EFFNET_FEATURES_PATH    = "branch_a_features_efficientnet.npy"               # 1280-dim
+EFFNET_METADATA_PATH    = "branch_a_metadata_labeled_efficientnet.csv"
 
-MOBILENET_FEATURES_PATH = "branch_a_features_dualstream_fa_mobilenet.npy"     # 960-dim
-MOBILENET_METADATA_PATH = "branch_a_metadata_labeled_dualstream_fa_mobilenet.csv"
+MOBILENET_FEATURES_PATH = "branch_a_features_mobilenet.npy"     # 960-dim
+MOBILENET_METADATA_PATH = "branch_a_metadata_labeled_mobilenet.csv"
 
-FLOW_OUTPUT             = "branch_a_flow_farneback_triple.npy"                # written, not read
+FLOW_OUTPUT             = "branch_a_flow_farneback_triple.npy"                
 MODEL_OUT               = "model_branch_a_triplestream_farneback.pkl"
 
 N_FOLDS      = 5
@@ -214,8 +204,8 @@ def verify_alignment(meta_e, meta_m):
 
 def main():
     start = time.time()
-    print("--- TRAIN BRANCH A TRIPLE-STREAM (EffNet + MobileNetV3 + Farneback Flow, FRESH STATS, NO PCA, 5-FOLD CV) ---")
-    print("--- (leakage-free inner CV: fresh scaler per inner fold) ---\n")
+    print("--- TRAIN BRANCH A TRIPLE-STREAM (EffNet + MobileNetV3 + Farneback Flow, 5-FOLD CV) ---")
+    print("--- inner CV: fresh scaler per inner fold) ---\n")
 
     # --- Load EfficientNet stream ---
     try:

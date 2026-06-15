@@ -9,9 +9,9 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
+
 # MATCHED-SIZE NO-BRANCHING BASELINE — EXTRACTOR (STEP 1 of 3, TRIPLE-STREAM)
-# -----------------------------------------------------------------------------
+
 # Selects 65 videos at random from each of the 4 subfolders
 # (high_quality_ai, high_quality_real, low_quality_ai, low_quality_real)
 # = 260 videos total, matching the per-branch training size of Branch A and B.
@@ -24,7 +24,7 @@ import time
 #   mixed260_features_effnet_triple.npy     — [N, 1280]
 #   mixed260_features_mobilenet_triple.npy  — [N, 960]
 #   mixed260_metadata_triple.csv            — shared metadata (same row order)
-# =============================================================================
+
 
 INPUT_ROOT  = "processed"
 ROUTING_FILE = "video_routing.csv"

@@ -8,9 +8,9 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
+
 # MATCHED-SIZE NO-BRANCHING BASELINE — EXTRACTOR (STEP 1 of 3, BRANCH B TRIPLE)
-# -----------------------------------------------------------------------------
+
 # Selects 65 videos at random from each of the 4 subfolders
 # (high_quality_ai, high_quality_real, low_quality_ai, low_quality_real)
 # = 260 videos total, matching the per-branch training size of Branch B.

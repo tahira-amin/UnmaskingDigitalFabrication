@@ -3,17 +3,17 @@ import numpy as np
 import os
 import time
 
-# =============================================================================
-# FOLD-AWARE DUAL-STREAM LABELER (Branch A) — STEP 2 of 3
-# -----------------------------------------------------------------------------
-# Adds the target column to the semantic-feature metadata. The features file
-# itself (1280-dim semantic) is unchanged. frame_path is carried through so the
-# trainer can load images to train the noise CNN per fold.
-# =============================================================================
 
-INPUT_FEATURES          = "branch_a_features_dualstream_fa_mobilenet.npy"
-INPUT_METADATA          = "branch_a_metadata_dualstream_fa_mobilenet.csv"
-OUTPUT_METADATA_LABELED = "branch_a_metadata_labeled_dualstream_fa_mobilenet.csv"
+# MOBILENETV3 LABELER (Branch A) — STEP 2 of 3
+
+# Adds the target column to the semantic-feature metadata. The features file
+# itself is unchanged. frame_path is carried through so the
+# trainer can load images to train the noise CNN per fold.
+
+
+INPUT_FEATURES          = "branch_a_features_mobilenet.npy"
+INPUT_METADATA          = "branch_a_metadata_mobilenet.csv"
+OUTPUT_METADATA_LABELED = "branch_a_metadata_labeled_mobilenet.csv"
 
 
 def main():
@@ -23,11 +23,11 @@ def main():
         print("Error: Missing features or metadata.")
         print(f"   Expected: {INPUT_FEATURES}")
         print(f"   Expected: {INPUT_METADATA}")
-        print("Run feature_extractor_a_dualstream_fa.py first.")
+        print("Run feature_extractor_a_mobilenet.py first.")
         return
 
     print("Loading semantic features + metadata for Branch A (fold-aware)...")
-    features = np.load(INPUT_FEATURES)   # [N, 1280] semantic only
+    features = np.load(INPUT_FEATURES)   
     metadata = pd.read_csv(INPUT_METADATA)
     print(f"Loaded {len(features)} frames with {features.shape[1]}-dim semantic features.")
 
@@ -40,7 +40,7 @@ def main():
         return
     if 'key' not in metadata.columns:
         print("ERROR: metadata is missing the 'key' column. This usually means the CSV is")
-        print("       from an OLD extractor run, not feature_extractor_a_dualstream_fa.py.")
+        print("       from an OLD extractor run, not feature_extractor_a_mobilenet.py.")
         print("       Re-run the fold-aware extractor so features and metadata are from the")
         print("       SAME run, then re-run this labeler.")
         return
@@ -50,7 +50,7 @@ def main():
     metadata.to_csv(OUTPUT_METADATA_LABELED, index=False)
 
     print(f"\n[DONE] Prepared {len(features)} frames for fold-aware training")
-    print(f"   Semantic features: {INPUT_FEATURES} (1280-dim, noise CNN trained per fold)")
+    print(f"   Semantic features: {INPUT_FEATURES} (960-dim, noise CNN trained per fold)")
     print(f"   Labeled metadata:  {OUTPUT_METADATA_LABELED}")
     print(f"   Total time: {time.time()-start:.2f}s")
 

@@ -16,7 +16,7 @@ from sklearn.metrics import (accuracy_score, precision_score, recall_score,
 import time
 from tqdm import tqdm
 
-# =============================================================================
+
 # SINGLE SPLIT TRAINER (Branch A) — EffNet + MobileNetV3 + FARNEBACK FLOW
 # -----------------------------------------------------------------------------
 # Identical to the 5-fold CV trainer in every way EXCEPT that it runs a
@@ -24,13 +24,12 @@ from tqdm import tqdm
 # instead of 5-fold GroupKFold. Use this for fast sklearn version testing.
 # Everything else — C selection, leakage-free inner CV, StandardScaler,
 # LogReg, mode voting, metrics — is unchanged.
-# =============================================================================
 
-EFFNET_FEATURES_PATH    = "branch_a_features_dualstream_fa.npy"
-EFFNET_METADATA_PATH    = "branch_a_metadata_labeled_dualstream_fa.csv"
+EFFNET_FEATURES_PATH    = "branch_a_features_efficientnet.npy"
+EFFNET_METADATA_PATH    = "branch_a_metadata_labeled_efficientnet.csv"
 
-MOBILENET_FEATURES_PATH = "branch_a_features_dualstream_fa_mobilenet.npy"
-MOBILENET_METADATA_PATH = "branch_a_metadata_labeled_dualstream_fa_mobilenet.csv"
+MOBILENET_FEATURES_PATH = "branch_a_features_mobilenet.npy"
+MOBILENET_METADATA_PATH = "branch_a_metadata_labeled_mobilenet.csv"
 
 FLOW_OUTPUT             = "branch_a_flow_farneback_triple.npy"
 MODEL_OUT               = "model_branch_a_single_split.pkl"

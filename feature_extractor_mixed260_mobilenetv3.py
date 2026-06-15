@@ -9,16 +9,16 @@ import numpy as np
 from tqdm import tqdm
 import time
 
-# =============================================================================
+
 # MATCHED-SIZE NO-BRANCHING BASELINE — EXTRACTOR (STEP 1 of 3)
-# -----------------------------------------------------------------------------
+
 # Selects 65 videos at random from each of the 4 subfolders
 # (high_quality_ai, high_quality_real, low_quality_ai, low_quality_real)
 # = 260 videos total, matching the per-branch training size of Branch A and
 # Branch B. This isolates the branching effect from the data-size effect that
 # made the all-520 baseline look better than the branches.
 # Mirrors feature_extractor_all_effnet.py except for the balanced subsample.
-# =============================================================================
+
 
 # CONFIGURATION
 INPUT_ROOT = "processed"
@@ -36,16 +36,16 @@ SUBFOLDERS = ['high_quality_ai', 'high_quality_real',
 
 
 def get_feature_extractor():
-    print("Loading EfficientNet-B0 (Pre-trained)...")
+    print("Loading MobileNet V3 Large (Pre-trained)...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Running on device: {device}")
 
     weights = models.MobileNet_V3_Large_Weights.DEFAULT
     model = models.mobilenet_v3_large(weights=weights)
 
-    class EfficientNetExtractor(nn.Module):
+    class MobileNetExtractor(nn.Module):
         def __init__(self, original_model):
-            super(EfficientNetExtractor, self).__init__()
+            super(MobileNetExtractor, self).__init__()
             self.features = original_model.features
             self.avgpool = original_model.avgpool
             self.flatten = nn.Flatten()
@@ -56,7 +56,7 @@ def get_feature_extractor():
             x = self.flatten(x)
             return x
 
-    extractor = EfficientNetExtractor(model)
+    extractor = MobileNetExtractor(model)
     extractor.to(device)
     extractor.eval()
 
@@ -123,14 +123,14 @@ def main():
         print("Error: No frames found.")
         return
 
-    # 3. Setup EfficientNet
+    # 3. Setup MobileNet V3
     model, preprocess, device = get_feature_extractor()
 
     features_list = []
     metadata_list = []
 
-    # 4. Extraction Loop
-    print("Extracting EfficientNet-B0 features (1280 dimensions)...")
+    # 4. Extraction Loop    
+    print("Extracting MobileNet V3 features (960 dimensions)...")
     num_batches = (len(paths) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for i in tqdm(range(0, len(paths), BATCH_SIZE), total=num_batches):
