@@ -1,0 +1,15 @@
+/DevDataset
+/processed
+*.mp4
+*.jpg 
+/.venv
+*.pkl
+*.pth
+*.npy
+*.csv
+metric_discriminatory_plots/
+metric_mean_plots_scaled/
+__pycache__/
+*.pyc
+*.png
+*.jpeg
